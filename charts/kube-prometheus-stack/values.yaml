@@ -1387,7 +1387,7 @@ grafana:
         KUBERNETES_SERVICE_HOST: "kubernetes.default.svc"
         SKIP_TLS_VERIFY: "true"
 
-      enabled: true
+      enabled: false
       label: grafana_dashboard
       labelValue: "1"
       # Allow discovery in all namespaces for dashboards
