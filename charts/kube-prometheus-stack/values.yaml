@@ -1367,15 +1367,15 @@ grafana:
 
   # # To make Grafana persistent (Using Statefulset)
   # #
-  # persistence:
-  #   enabled: true
-  #   type: sts
-  #   storageClassName: "storageClassName"
-  #   accessModes:
-  #     - ReadWriteOnce
-  #   size: 20Gi
-  #   finalizers:
-  #     - kubernetes.io/pvc-protection
+  persistence:
+    enabled: true
+    type: sts
+    storageClassName: "microk8s-hostpath"
+    accessModes:
+     - ReadWriteOnce
+    size: 20Gi
+    finalizers:
+     - kubernetes.io/pvc-protection
 
   serviceAccount:
     create: true
@@ -4410,12 +4410,12 @@ prometheus:
     ## port to 2379 and allow etcd scraping provided it is running on all Kubernetes master nodes
     ##
     additionalScrapeConfigs:
-      - job_name: 'ppi-service'
+      - job_name: 'precheck-auto-service'
         kubernetes_sd_configs:
           - role: pod
         relabel_configs:
           - source_labels: [ __meta_kubernetes_pod_label_app ]
-            regex: ppi-service
+            regex: precheck-auto
             action: keep
           - source_labels: [ __meta_kubernetes_pod_annotation_prometheus_io_path ]
             target_label: __metrics_path__
