@@ -1226,6 +1226,12 @@ grafana:
   enabled: true
   namespaceOverride: ""
 
+  ## Disable init-chown-data container — microk8s-hostpath storage doesn't
+  ## support chown from init containers. fsGroup: 472 in securityContext
+  ## handles volume ownership instead.
+  initChownData:
+    enabled: false
+
   ## ForceDeployDatasources Create datasource configmap even if grafana deployment has been disabled
   ##
   forceDeployDatasources: false
