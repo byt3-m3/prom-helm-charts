@@ -4181,7 +4181,48 @@ prometheus:
     ##
     ## Default configuration will connect to the alertmanager deployed as part of this release
     ##
-    alertingEndpoints: []
+    ## Two endpoints are listed on purpose.
+    ##
+    ## The first is Grafana's built-in Alertmanager. Prometheus-evaluated
+    ## alerts (the PrometheusRule objects in the `allphase` namespace, 115 of
+    ## them as of 2026-08-24) had no notification path at all: the in-cluster
+    ## Alertmanager below ships the upstream kube-prometheus-stack default,
+    ## whose only receiver is named 'null'. Every rule evaluated, fired, and
+    ## notified nobody. Sending the same alerts to Grafana lets them reuse the
+    ## contact point that already works — "Baxterhome Slack + ntfy", which
+    ## fans out to the #stg-app-alerts Slack channel and to the
+    ## stg-allphase-alerts ntfy topic — instead of provisioning a second Slack
+    ## app and storing its credential here. See ALLPHASED-706.
+    ##
+    ## The Bearer token belongs to the `prometheus-alertmanager` Grafana
+    ## service account (Editor). It is NOT chart-managed: create it out of
+    ## band, the same way grafana-vps-admin is, so no render can regenerate it.
+    ##
+    ##   kubectl -n monitoring create secret generic grafana-alertmanager-token \
+    ##     --from-literal=token=<service account token>
+    ##
+    ## The second entry is the in-cluster Alertmanager. Setting
+    ## alertingEndpoints REPLACES the chart's default entry rather than adding
+    ## to it (templates/prometheus/prometheus.yaml, the `if
+    ## .Values.prometheus.prometheusSpec.alertingEndpoints` branch), so it has
+    ## to be restated here or Prometheus stops talking to it entirely.
+    ##
+    alertingEndpoints:
+      - name: prom-vps-grafana
+        namespace: monitoring
+        port: http-web
+        scheme: http
+        pathPrefix: /api/alertmanager/grafana
+        apiVersion: v2
+        authorization:
+          type: Bearer
+          credentials:
+            name: grafana-alertmanager-token
+            key: token
+      - name: prom-vps-kube-prometheus-s-alertmanager
+        namespace: monitoring
+        port: http-web
+        apiVersion: v2
     # - name: ""
     #   namespace: ""
     #   port: http
