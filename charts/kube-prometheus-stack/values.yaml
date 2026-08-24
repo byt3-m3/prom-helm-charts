@@ -543,6 +543,10 @@ alertmanager:
   config:
     global:
       resolve_timeout: 5m
+      ## Read from the mounted Secret rather than inlined. Alertmanager re-reads
+      ## the file, so rotating the webhook is a Secret update plus a pod restart
+      ## and never a chart change.
+      slack_api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/webhook-url
     inhibit_rules:
       - source_matchers:
           - 'severity = critical'
@@ -607,19 +611,28 @@ alertmanager:
       group_wait: 30s
       group_interval: 5m
       repeat_interval: 12h
-      receiver: 'ntfy-warning'
+      receiver: 'alerts-warning'
       routes:
         - receiver: 'null'
           matchers:
             - alertname =~ "Watchdog|InfoInhibitor"
-        - receiver: 'ntfy-critical'
+        - receiver: 'alerts-critical'
           matchers:
             - severity =~ "critical|page"
-        - receiver: 'ntfy-info'
+        - receiver: 'alerts-info'
           matchers:
             - severity = "info"
 
-    ## The three ntfy receivers differ only in priority and tag.
+    ## Three receivers, one per severity tier. Each fans out to BOTH channels:
+    ## the #stg-app-alerts Slack channel and the stg-allphase-alerts ntfy topic.
+    ## They differ only in ntfy priority and tag; the Slack side is identical
+    ## across all three, because Slack has no priority concept and the title
+    ## already carries the status.
+    ##
+    ## Naming: these were `ntfy-*` when ntfy was the only destination. They are
+    ## `alerts-*` now precisely so a third channel does not require renaming
+    ## them again, and so no reader assumes the receiver name is the full list
+    ## of who gets paged.
     ##
     ## No bridge and no credential are involved. ntfy renders the Alertmanager
     ## webhook payload itself: `template=yes` makes it treat the `title` and
@@ -642,22 +655,54 @@ alertmanager:
     ## name can read these alerts or post fakes into them. That is a known
     ## exposure, not an oversight: see the follow-up on ALLPHASED-706.
     ##
-    ## Slack is deliberately absent. Alertmanager's slack_configs needs an
-    ## incoming webhook URL, and the Slack credential this org already has
-    ## lives inside Grafana as a bot token, which Alertmanager cannot use.
-    ## Adding Slack here means minting a new webhook and storing it as a
-    ## Secret. That is a separate change with a separate approval.
+    ## Slack needs its own credential and could not reuse Grafana's. Grafana's
+    ## contact point authenticates with a bot token; Alertmanager's
+    ## slack_configs accepts only an incoming-webhook URL. The two are not
+    ## interchangeable, so a webhook was minted for this and stored in
+    ## Secret/alertmanager-slack-webhook (see alertmanagerSpec.secrets above).
+    ## `channel` is set because Alertmanager requires the field, but an
+    ## incoming webhook is already bound to its channel and ignores the value.
+    ##
+    ## Slack and ntfy now receive the same alerts by different paths. Grafana's
+    ## own contact point still exists and still posts to the same channel, but
+    ## it serves ONLY Grafana-managed rules — Grafana's built-in Alertmanager
+    ## has no write API for external Prometheus alerts, which is why these
+    ## rules route through this Alertmanager instead.
     receivers:
       - name: 'null'
-      - name: 'ntfy-critical'
+      - name: 'alerts-critical'
+        slack_configs:
+          - channel: '#stg-app-alerts'
+            send_resolved: true
+            title: '{{ .Status | toUpper }} · {{ .CommonLabels.alertname }}'
+            text: >-
+              {{ range .Alerts }}{{ .Annotations.summary }}
+              {{ end }}
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
         webhook_configs:
           - send_resolved: true
             url: 'http://ntfy.ntfy.svc.cluster.local/stg-allphase-alerts?template=yes&priority=5&tags=rotating_light&click=https%3A%2F%2Fprometheus.vps.baxterhome.net%2Falerts&title=%7B%7B.status%7D%7D%20%7B%7B.commonLabels.alertname%7D%7D&message=%7B%7Brange%20.alerts%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D'
-      - name: 'ntfy-warning'
+      - name: 'alerts-warning'
+        slack_configs:
+          - channel: '#stg-app-alerts'
+            send_resolved: true
+            title: '{{ .Status | toUpper }} · {{ .CommonLabels.alertname }}'
+            text: >-
+              {{ range .Alerts }}{{ .Annotations.summary }}
+              {{ end }}
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
         webhook_configs:
           - send_resolved: true
             url: 'http://ntfy.ntfy.svc.cluster.local/stg-allphase-alerts?template=yes&priority=3&tags=warning&click=https%3A%2F%2Fprometheus.vps.baxterhome.net%2Falerts&title=%7B%7B.status%7D%7D%20%7B%7B.commonLabels.alertname%7D%7D&message=%7B%7Brange%20.alerts%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D'
-      - name: 'ntfy-info'
+      - name: 'alerts-info'
+        slack_configs:
+          - channel: '#stg-app-alerts'
+            send_resolved: true
+            title: '{{ .Status | toUpper }} · {{ .CommonLabels.alertname }}'
+            text: >-
+              {{ range .Alerts }}{{ .Annotations.summary }}
+              {{ end }}
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
         webhook_configs:
           - send_resolved: true
             url: 'http://ntfy.ntfy.svc.cluster.local/stg-allphase-alerts?template=yes&priority=2&tags=information_source&click=https%3A%2F%2Fprometheus.vps.baxterhome.net%2Falerts&title=%7B%7B.status%7D%7D%20%7B%7B.commonLabels.alertname%7D%7D&message=%7B%7Brange%20.alerts%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D'
@@ -1043,7 +1088,20 @@ alertmanager:
     ## Secrets is a list of Secrets in the same namespace as the Alertmanager object, which shall be mounted into the
     ## Alertmanager Pods. The Secrets are mounted into /etc/alertmanager/secrets/.
     ##
-    secrets: []
+    ## alertmanager-slack-webhook holds the Slack incoming-webhook URL under the
+    ## key `webhook-url`, read by global.slack_api_url_file below. It is created
+    ## OUT OF BAND and is deliberately not chart-managed, for the same reason
+    ## grafana-vps-admin is not: this fork regenerates chart-rendered secrets on
+    ## every ArgoCD render, and that has already rotated a live credential out
+    ## from under us once. Recreate it with:
+    ##
+    ##   kubectl -n monitoring create secret generic alertmanager-slack-webhook \
+    ##     --from-literal=webhook-url=<https://hooks.slack.com/services/...>
+    ##
+    ## The URL is a bearer credential — anyone holding it can post to the
+    ## channel. It must never appear in this file or any other tracked file.
+    secrets:
+      - alertmanager-slack-webhook
 
     ## If false then the user will opt out of automounting API credentials.
     ##
