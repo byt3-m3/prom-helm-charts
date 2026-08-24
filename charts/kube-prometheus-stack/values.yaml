@@ -566,18 +566,101 @@ alertmanager:
           - 'namespace'
       - target_matchers:
           - 'alertname = InfoInhibitor'
+    ## Routing decision (ALLPHASED-706).
+    ##
+    ## Until this change the tree below was the unmodified upstream default:
+    ## every alert fell through to a receiver literally named 'null' and
+    ## notified nobody. That is a sane chart default and a broken deployed
+    ## state. The allphase namespace alone carries 115 alert rules across
+    ## three PrometheusRule objects, money-integrity rules included, and all
+    ## 115 evaluated, fired, and reached no human.
+    ##
+    ## Which severities notify, stated explicitly because the ticket asks for
+    ## a decision rather than a default:
+    ##
+    ##   critical, page -> ntfy priority 5. Bypasses do-not-disturb.
+    ##   warning        -> ntfy priority 3. Normal notification.
+    ##   info           -> ntfy priority 2. Silent. In the app, no sound.
+    ##   Watchdog, InfoInhibitor -> 'null'. These two are liveness plumbing,
+    ##                              not conditions. They stay silent.
+    ##
+    ## `page` is matched beside `critical` because one rule uses it:
+    ## HostingerSMTPProbeFailed, in the allphase chart's
+    ## templates/prometheus-rules.yaml. It is the only rule of 115 that does
+    ## not use critical/warning. Matching it here rather than waiting on a
+    ## fix in the other repo means the loudest-intent rule in the fleet does
+    ## not quietly land in the warning bucket in the meantime.
+    ##
+    ## Anything with an unrecognised severity falls through to ntfy-warning.
+    ## The default is deliberately a real receiver and never 'null': a
+    ## misclassified alert should be too loud, never silent.
+    ##
+    ## Routing keys on `severity`, NOT on the `domain` annotation the
+    ## allphase rules carry. `domain` is documentation on the rule and drives
+    ## no decision here. Route on a label or do not route on it at all.
+    ##
+    ## group_by gains `alertname` so a group's commonLabels always carries one
+    ## alertname. The ntfy title template reads it, and a group spanning two
+    ## alertnames would render an empty title.
     route:
-      group_by: ['namespace']
+      group_by: ['namespace', 'alertname']
       group_wait: 30s
       group_interval: 5m
       repeat_interval: 12h
-      receiver: 'null'
+      receiver: 'ntfy-warning'
       routes:
         - receiver: 'null'
           matchers:
-            - alertname = "Watchdog"
+            - alertname =~ "Watchdog|InfoInhibitor"
+        - receiver: 'ntfy-critical'
+          matchers:
+            - severity =~ "critical|page"
+        - receiver: 'ntfy-info'
+          matchers:
+            - severity = "info"
+
+    ## The three ntfy receivers differ only in priority and tag.
+    ##
+    ## No bridge and no credential are involved. ntfy renders the Alertmanager
+    ## webhook payload itself: `template=yes` makes it treat the `title` and
+    ## `message` query parameters as Go templates evaluated against the POSTed
+    ## JSON body. Verified against the running ntfy on 2026-08-24 by POSTing an
+    ## Alertmanager-shaped payload and reading the rendered message back off
+    ## the topic.
+    ##
+    ## Decoded, both templates are:
+    ##   title:   {{.status}} {{.commonLabels.alertname}}
+    ##   message: {{range .alerts}}{{.annotations.summary}}
+    ##            {{end}}
+    ##
+    ## The in-cluster Service URL is used on purpose. The public hostname
+    ## notifications.vps.baxterhome.net resolves and works, but it leaves the
+    ## cluster and comes back through the gateway for no gain.
+    ##
+    ## The topic has NO authentication. ntfy's server.yml sets no auth-file,
+    ## so its default access is read-write and anyone who learns the topic
+    ## name can read these alerts or post fakes into them. That is a known
+    ## exposure, not an oversight: see the follow-up on ALLPHASED-706.
+    ##
+    ## Slack is deliberately absent. Alertmanager's slack_configs needs an
+    ## incoming webhook URL, and the Slack credential this org already has
+    ## lives inside Grafana as a bot token, which Alertmanager cannot use.
+    ## Adding Slack here means minting a new webhook and storing it as a
+    ## Secret. That is a separate change with a separate approval.
     receivers:
       - name: 'null'
+      - name: 'ntfy-critical'
+        webhook_configs:
+          - send_resolved: true
+            url: 'http://ntfy.ntfy.svc.cluster.local/stg-allphase-alerts?template=yes&priority=5&tags=rotating_light&click=https%3A%2F%2Fprometheus.vps.baxterhome.net%2Falerts&title=%7B%7B.status%7D%7D%20%7B%7B.commonLabels.alertname%7D%7D&message=%7B%7Brange%20.alerts%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D'
+      - name: 'ntfy-warning'
+        webhook_configs:
+          - send_resolved: true
+            url: 'http://ntfy.ntfy.svc.cluster.local/stg-allphase-alerts?template=yes&priority=3&tags=warning&click=https%3A%2F%2Fprometheus.vps.baxterhome.net%2Falerts&title=%7B%7B.status%7D%7D%20%7B%7B.commonLabels.alertname%7D%7D&message=%7B%7Brange%20.alerts%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D'
+      - name: 'ntfy-info'
+        webhook_configs:
+          - send_resolved: true
+            url: 'http://ntfy.ntfy.svc.cluster.local/stg-allphase-alerts?template=yes&priority=2&tags=information_source&click=https%3A%2F%2Fprometheus.vps.baxterhome.net%2Falerts&title=%7B%7B.status%7D%7D%20%7B%7B.commonLabels.alertname%7D%7D&message=%7B%7Brange%20.alerts%7D%7D%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D'
     templates:
       - '/etc/alertmanager/config/*.tmpl'
 
