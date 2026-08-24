@@ -1515,6 +1515,32 @@ grafana:
   ##
   defaultDashboardsInterval: 1m
 
+  ## Absolute address this Grafana is reachable at (HOMEDEV-93).
+  ##
+  ## Without root_url Grafana falls back to a compiled-in http://localhost:3000/
+  ## and reports that as `appUrl`. That value is what `.ExternalURL` resolves to
+  ## inside every notification template, so every link Grafana put in a Slack
+  ## message, an email or a webhook payload pointed at localhost and was dead on
+  ## any device that was not the Grafana pod itself. It is not only an alerting
+  ## concern — root_url is what Grafana uses to build absolute links generally,
+  ## share URLs and OAuth redirect targets included.
+  ##
+  ## The address is served by HTTPRoute/prom-vps-grafana. `domain` is set to
+  ## match rather than left at the chart's empty default, so the two cannot
+  ## disagree.
+  ##
+  ## serve_from_sub_path is deliberately NOT set. Grafana is served at the
+  ## domain root here, and enabling it alongside root_url is the usual way this
+  ## fix goes wrong: it makes Grafana prefix its own asset paths and the UI
+  ## comes back blank.
+  ##
+  ## Grafana reads this at start-up only, so changing it needs a pod restart
+  ## and not merely a ConfigMap update.
+  grafana.ini:
+    server:
+      domain: metrics.vps.baxterhome.net
+      root_url: https://metrics.vps.baxterhome.net
+
   # Administrator credentials when not using an existing secret (see below)
   adminUser: admin
   # adminPassword: strongpassword
