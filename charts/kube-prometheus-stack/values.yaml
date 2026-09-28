@@ -160,7 +160,18 @@ crds:
 
 ## Custom rules to override "for" and "severity" in defaultRules
 ##
-customRules: {}
+## AlertmanagerFailedToSendAlerts defaults to severity "warning" upstream.
+## Overridden to "critical" here (PHA-329): this rule is how a broken
+## notification path announces itself, so it must land in the
+## widest-fan-out tier. On prom-vps both the alerts-critical and
+## alerts-warning receivers currently fan out to Slack AND ntfy, so this
+## has no effect on where the alert is delivered today — but it pins the
+## alert to the loudest tier so a future change that differentiates the
+## receivers (e.g. paging only on critical) does not silently downgrade
+## the one alert that watches the alerting path itself.
+customRules:
+  AlertmanagerFailedToSendAlerts:
+    severity: "critical"
   # AlertmanagerFailedReload:
   #   for: 3m
   # AlertmanagerMembersInconsistent:
@@ -169,43 +180,60 @@ customRules: {}
 
 ## Create default rules for monitoring the cluster
 ##
+## create was `false` here, which — contrary to what the per-group flags
+## below suggest — disables every default rule group, not just
+## alertmanager.rules: `create` is a top-level AND gate the chart checks
+## before rendering any group (see templates/prometheus/rules-1.14/*.yaml).
+## Confirmed empty: `helm template` with the prior values rendered zero
+## `PrometheusRule` alerts from any default group (etcd, general, node,
+## prometheusOperator, etc. included), not only alertmanager.
+##
+## PHA-329 turns `create` back on but keeps every group except
+## `alertmanager` disabled below, rather than restoring all ~30 upstream
+## groups at once. This is a single-node VPS microk8s cluster; several
+## groups (kubeControllerManager, kubeSchedulerAlerting, kubelet, etcd)
+## assume control-plane components this cluster may not expose metrics
+## for, and some of their rules use `absent()`-style checks that would
+## fire immediately on a missing scrape target. Restoring those is a
+## separate, deliberate decision — filed as a follow-up — not a side
+## effect of fixing alerting self-monitoring.
 defaultRules:
-  create: false
+  create: true
   rules:
     alertmanager: true
-    etcd: true
-    configReloaders: true
-    general: true
-    k8sContainerCpuUsageSecondsTotal: true
-    k8sContainerMemoryCache: true
-    k8sContainerMemoryRss: true
-    k8sContainerMemorySwap: true
-    k8sContainerResource: true
-    k8sContainerMemoryWorkingSetBytes: true
-    k8sPodOwner: true
-    kubeApiserverAvailability: true
-    kubeApiserverBurnrate: true
-    kubeApiserverHistogram: true
-    kubeApiserverSlos: true
-    kubeControllerManager: true
-    kubelet: true
-    kubeProxy: true
-    kubePrometheusGeneral: true
-    kubePrometheusNodeRecording: true
-    kubernetesApps: true
-    kubernetesResources: true
-    kubernetesStorage: true
-    kubernetesSystem: true
-    kubeSchedulerAlerting: true
-    kubeSchedulerRecording: true
-    kubeStateMetrics: true
-    network: true
-    node: true
-    nodeExporterAlerting: true
-    nodeExporterRecording: true
-    prometheus: true
-    prometheusOperator: true
-    windows: true
+    etcd: false
+    configReloaders: false
+    general: false
+    k8sContainerCpuUsageSecondsTotal: false
+    k8sContainerMemoryCache: false
+    k8sContainerMemoryRss: false
+    k8sContainerMemorySwap: false
+    k8sContainerResource: false
+    k8sContainerMemoryWorkingSetBytes: false
+    k8sPodOwner: false
+    kubeApiserverAvailability: false
+    kubeApiserverBurnrate: false
+    kubeApiserverHistogram: false
+    kubeApiserverSlos: false
+    kubeControllerManager: false
+    kubelet: false
+    kubeProxy: false
+    kubePrometheusGeneral: false
+    kubePrometheusNodeRecording: false
+    kubernetesApps: false
+    kubernetesResources: false
+    kubernetesStorage: false
+    kubernetesSystem: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeStateMetrics: false
+    network: false
+    node: false
+    nodeExporterAlerting: false
+    nodeExporterRecording: false
+    prometheus: false
+    prometheusOperator: false
+    windows: false
 
   # Defines the operator for namespace selection in rules
   # Use "=~" to include namespaces matching the pattern (default)
